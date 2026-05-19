@@ -4,10 +4,8 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Browser Automation - BotForge</title>
-  <!-- Fixed: Absolute paths for Replit -->
   <link rel="stylesheet" href="/css/style.css" />
   <style>
-    /* Fallback styles if CSS fails to load */
     body { font-family: system-ui, sans-serif; margin: 0; background: #0f0f12; color: #e0e0e0; }
     header { display: flex; justify-content: space-between; padding: 10px 16px; background: #1a1a20; border-bottom: 1px solid #333; }
     main { display: flex; gap: 12px; padding: 12px; height: calc(100vh - 50px); }
@@ -81,7 +79,56 @@
     .api-hint { font-size: 11px; color: #666; margin-top: 12px; padding-top: 10px; border-top: 1px solid #222; }
     .api-hint code { background: #222; padding: 2px 5px; border-radius: 3px; }
     .logs-toolbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
-    /* Floating logs panel (toggled with Ctrl+L) */
+
+    /* ── Active flow card ── */
+    .active-flow-card {
+      background: #1a1a20;
+      border: 1px solid #2a2a35;
+      border-radius: 6px;
+      padding: 10px 12px;
+      margin-bottom: 12px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+    .active-flow-card .afc-label {
+      font-size: 11px;
+      color: #666;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+    .active-flow-card .afc-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #e0e0e0;
+    }
+    .active-flow-card .afc-name.empty {
+      color: #555;
+      font-style: italic;
+      font-weight: 400;
+    }
+    .active-flow-card .afc-endpoint {
+      font-size: 11px;
+      color: #4f46e5;
+      font-family: monospace;
+    }
+    .active-flow-card .afc-hint {
+      font-size: 11px;
+      color: #555;
+      margin-top: 2px;
+    }
+    .no-flow-warning {
+      background: #2a1a0a;
+      border: 1px solid #7c4a1a;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-size: 12px;
+      color: #fbbf24;
+      display: none;
+      margin-bottom: 10px;
+    }
+
+    /* Floating logs panel */
     .floating-logs { position: fixed; right: 18px; bottom: 18px; width: 380px; height: 260px; background: #0b0b0d; border: 1px solid #222; border-radius: 8px; box-shadow: 0 8px 30px rgba(0,0,0,0.6); z-index: 9999; display: flex; flex-direction: column; overflow: hidden; }
     .floating-logs-header { display:flex; align-items:center; justify-content:space-between; padding:8px 10px; background: linear-gradient(90deg,#15151a,#0f0f12); border-bottom:1px solid #161616; color:#ddd; font-weight:600; }
     .floating-logs .log-box { padding:8px; font-size:12px; overflow:auto; background:transparent; border:none; }
@@ -153,18 +200,19 @@
 
     <!-- AUTOMATION TAB -->
     <div class="tab-content active" id="tab-automation">
-      <div class="field-group">
-        <label>Profile</label>
-        <select id="profileSelect"></select>
+
+      <!-- Active flow indicator (replaces the profile dropdown) -->
+      <div class="active-flow-card">
+        <span class="afc-label">Active Flow</span>
+        <span class="afc-name empty" id="activeFlowName">No flow loaded</span>
+        <span class="afc-endpoint" id="activeFlowEndpoint"></span>
+        <span class="afc-hint">Set your flow in the 🛠 Builder tab, then run it here.</span>
       </div>
-      <div class="field-group">
-        <label>Endpoint</label>
-        <div id="profileEndpoint" class="response-box" style="min-height:28px; max-height:48px; white-space:normal;">/run/<em>profile-slug</em></div>
+
+      <div class="no-flow-warning" id="noFlowWarning">
+        ⚠ No flow is loaded. Go to the <strong>Builder</strong> tab to create or load one.
       </div>
-      <div class="field-group">
-        <label>Endpoint docs</label>
-        <div id="endpointsList" class="response-box" style="min-height:60px; max-height:150px; white-space:pre-wrap;">Loading endpoints...</div>
-      </div>
+
       <div class="field-group">
         <label>Prompt</label>
         <textarea id="promptInput" rows="4" placeholder="Type your prompt here..."></textarea>
@@ -231,7 +279,7 @@
           <button class="btn-danger btn-sm" onclick="deleteBuilderProfile()">🗑 Delete</button>
         </div>
         <div class="builder-hint">
-          Click on the live browser view (left) to add a step at that position. Drag steps to reorder.
+          Click on the live browser view (left) to add a step at that position. Drag steps to reorder. Hit <strong>Save Profile</strong> to persist — it will then be used when you click Run in the Automation tab.
         </div>
       </div>
 
@@ -299,6 +347,24 @@
     <div id="floatingLogBox" class="log-box"></div>
   </div>
 
+<script>
+  // Keep the active flow indicator styled correctly
+  function _syncFlowIndicator() {
+    const name = document.getElementById('activeFlowName');
+    const warning = document.getElementById('noFlowWarning');
+    if (!name) return;
+    const isEmpty = !name.textContent || name.textContent === 'No flow loaded' || name.textContent === '—';
+    name.classList.toggle('empty', isEmpty);
+    if (warning) warning.style.display = isEmpty ? 'block' : 'none';
+  }
+  // Observe changes to the indicator text
+  const _obs = new MutationObserver(_syncFlowIndicator);
+  document.addEventListener('DOMContentLoaded', () => {
+    const el = document.getElementById('activeFlowName');
+    if (el) _obs.observe(el, { childList: true, characterData: true, subtree: true });
+    _syncFlowIndicator();
+  });
+</script>
 <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.2/Sortable.min.js"></script>
 <script src="/js/app.js"></script>
 </body>

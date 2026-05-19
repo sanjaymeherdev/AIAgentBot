@@ -23,10 +23,6 @@ window.addEventListener('DOMContentLoaded', () => {
   setupManualInput();
   setupFloatingLogs();
   updateUrl();
-  document.getElementById('profileSelect').addEventListener('change', () => {
-    const profile = profiles.find(p => p.name === document.getElementById('profileSelect').value);
-    if (profile) updateProfileEndpoint(profile);
-  });
 });
 
 // ── TABS ──────────────────────────────────────────────────
@@ -139,7 +135,6 @@ function setupManualInput() {
   });
 }
 
-// ✅ Reusable function: send text + Enter (used by manual input AND builder "send" action)
 async function sendTextWithEnter(text) {
   try {
     if (text) {
@@ -258,7 +253,6 @@ function setupSSE() {
 
 // ── FLOATING LOGS (Ctrl+L) ─────────────────────────────────
 function setupFloatingLogs() {
-  // Toggle on Ctrl+L
   window.addEventListener('keydown', e => {
     if (e.ctrlKey && e.key && e.key.toLowerCase() === 'l') {
       e.preventDefault();
@@ -279,7 +273,6 @@ function toggleFloatingLogs(forceState) {
   panel.style.display = show ? 'flex' : 'none';
   panel.setAttribute('aria-hidden', show ? 'false' : 'true');
   if (show) {
-    // copy latest logs
     const main = document.getElementById('logBox');
     const dest = document.getElementById('floatingLogBox');
     if (main && dest) {
@@ -294,11 +287,10 @@ async function loadProfiles() {
   try {
     const r = await fetch('/profiles');
     profiles = await r.json();
-    renderProfileSelect();
     renderBuilderProfileSelect();
+    // Auto-load first profile into builder
     if (profiles.length) {
       loadBuilderFromProfile(profiles[0]);
-      updateProfileEndpoint(profiles[0]);
     }
     await loadEndpointDocs();
   } catch (e) {
@@ -330,10 +322,15 @@ function loadSelectedBuilderProfile() {
   addLog(`Loaded flow "${profile.name}"`, 'info');
 }
 
-function updateProfileEndpoint(profile) {
-  const endpoint = profile?.slug ? `/run/${profile.slug}` : '/run/<profile-slug>';
-  const el = document.getElementById('profileEndpoint');
-  if (el) el.textContent = endpoint;
+// ── Update the active flow indicator in the Automation tab ──
+function updateActiveFlowIndicator(name) {
+  const el = document.getElementById('activeFlowName');
+  if (el) el.textContent = name || '—';
+  const endpointEl = document.getElementById('activeFlowEndpoint');
+  if (endpointEl) {
+    const profile = profiles.find(p => p.name === name);
+    endpointEl.textContent = profile?.slug ? `/run/${profile.slug}` : '—';
+  }
 }
 
 async function loadEndpointDocs() {
@@ -354,22 +351,21 @@ async function loadEndpointDocs() {
   }
 }
 
-function renderProfileSelect() {
-  const sel = document.getElementById('profileSelect');
-  const cur = sel.value;
-  sel.innerHTML = profiles.map(p =>
-    `<option value="${escHtml(p.name)}">${escHtml(p.name)}</option>`
-  ).join('');
-  if (cur && profiles.find(p => p.name === cur)) sel.value = cur;
-  const selected = profiles.find(p => p.name === sel.value) || profiles[0];
-  updateProfileEndpoint(selected);
-}
-
 // ── AUTOMATION ────────────────────────────────────────────
 async function runAutomation() {
-  const profile = document.getElementById('profileSelect').value;
+  // Always run whatever is currently loaded in the builder
+  const profile = document.getElementById('builderName').value.trim();
   const prompt = document.getElementById('promptInput').value.trim();
-  if (!prompt) { addLog('Enter a prompt first', 'warn'); return; }
+
+  if (!profile) {
+    addLog('No flow loaded. Go to the Builder tab, create or load a flow, then come back to run it.', 'warn');
+    return;
+  }
+  if (!prompt) {
+    addLog('Enter a prompt first', 'warn');
+    return;
+  }
+
   addLog(`▶ Run "${profile}" — "${prompt.substring(0, 40)}..."`, 'info');
   setRunning(true);
   try {
@@ -420,7 +416,6 @@ function setResponse(text) {
 
 async function copyResponse() {
   const text = document.getElementById('responseBox')?.textContent || '';
-  // Try modern clipboard API first
   if (navigator.clipboard && navigator.clipboard.writeText) {
     try {
       await navigator.clipboard.writeText(text);
@@ -430,8 +425,6 @@ async function copyResponse() {
       addLog('Clipboard API failed: ' + (e && e.message ? e.message : e), 'warn');
     }
   }
-
-  // Fallback: use a temporary textarea and execCommand
   try {
     const ta = document.createElement('textarea');
     ta.value = text;
@@ -456,6 +449,8 @@ function loadBuilderFromProfile(profile) {
   builderSteps = JSON.parse(JSON.stringify(profile.steps || []));
   renderStepsList();
   renderBuilderMarkers();
+  // Keep automation tab in sync
+  updateActiveFlowIndicator(profile.name);
 }
 
 function loadBuilderProfile() {
@@ -478,9 +473,14 @@ async function saveBuilderProfile() {
   if (r.ok) {
     addLog(`Profile "${name}" saved`, 'info');
     await loadProfiles();
-    const result = await r.json();
-    const profile = profiles.find(p => p.slug === result.slug || p.name === name);
-    if (profile) updateProfileEndpoint(profile);
+    // Re-select the just-saved profile in the builder dropdown
+    const sel = document.getElementById('builderProfileSelect');
+    if (sel) {
+      const saved = profiles.find(p => p.name === name);
+      if (saved) sel.value = saved.slug;
+    }
+    // Update the automation tab indicator
+    updateActiveFlowIndicator(name);
   }
 }
 
@@ -492,6 +492,7 @@ async function deleteBuilderProfile() {
   await loadProfiles();
   builderSteps = [];
   renderStepsList();
+  updateActiveFlowIndicator('');
 }
 
 function addBuilderStep(bx, by, px, py) {
@@ -752,7 +753,7 @@ function saveStepEdit() {
       step.deltaX = gn('edit-deltaX'); step.deltaY = gn('edit-deltaY'); break;
     case 'type':
       step.text = g('edit-text'); step.delay = gn('edit-delay'); break;
-    case 'send': // ✅ Save text and delay for send action
+    case 'send':
       step.text = g('edit-text'); step.delay = gn('edit-delay');
       step.monitorDeepSeek = gb('edit-monitorDeepSeek');
       step.monitorQwen = gb('edit-monitorQwen');
