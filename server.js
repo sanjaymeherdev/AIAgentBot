@@ -91,7 +91,7 @@ async function loadProfilesFromDb() {
     slug: row.slug,
     name: row.name,
     url: row.url,
-    steps: row.steps || []
+    steps: (typeof row.steps === 'string' ? JSON.parse(row.steps) : row.steps) || []
   })));
 }
 
@@ -101,12 +101,14 @@ async function saveProfilesToDb(profiles) {
   await dbClient.query('BEGIN');
   try {
     for (const profile of sanitized) {
+      // Ensure steps is properly stringified for PostgreSQL JSON type
+      const stepsJson = typeof profile.steps === 'string' ? profile.steps : JSON.stringify(profile.steps || []);
       await dbClient.query(
         `INSERT INTO profiles (slug, name, url, steps, updated_at)
-         VALUES ($1, $2, $3, $4, now())
+         VALUES ($1, $2, $3, $4::json, now())
          ON CONFLICT (slug) DO UPDATE
          SET name = EXCLUDED.name, url = EXCLUDED.url, steps = EXCLUDED.steps, updated_at = now()`,
-        [profile.slug, profile.name, profile.url, JSON.stringify(profile.steps)]
+        [profile.slug, profile.name, profile.url, stepsJson]
       );
     }
     const slugs = sanitized.map(p => p.slug);
