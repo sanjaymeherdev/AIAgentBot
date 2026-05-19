@@ -353,11 +353,10 @@ async function loadEndpointDocs() {
 
 // ── AUTOMATION ────────────────────────────────────────────
 async function runAutomation() {
-  // Always run whatever is currently loaded in the builder
-  const profile = document.getElementById('builderName').value.trim();
+  const profileName = document.getElementById('builderName').value.trim();
   const prompt = document.getElementById('promptInput').value.trim();
 
-  if (!profile) {
+  if (!profileName) {
     addLog('No flow loaded. Go to the Builder tab, create or load a flow, then come back to run it.', 'warn');
     return;
   }
@@ -366,13 +365,14 @@ async function runAutomation() {
     return;
   }
 
-  addLog(`▶ Run "${profile}" — "${prompt.substring(0, 40)}..."`, 'info');
+  addLog(`▶ Run "${profileName}" — "${prompt.substring(0, 40)}..."`, 'info');
+  addLog(`📝 Prompt: "${prompt.substring(0, 60)}${prompt.length > 60 ? '...' : ''}"`, 'info');
   setRunning(true);
   try {
     const r = await fetch('/run', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ profile, prompt })
+      body: JSON.stringify({ profile: profileName, prompt })
     });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || 'Failed');
@@ -464,6 +464,7 @@ async function saveBuilderProfile() {
   const name = document.getElementById('builderName').value.trim();
   const url = document.getElementById('builderUrl').value.trim();
   if (!name) { addLog('Enter a profile name', 'warn'); return; }
+  if (builderSteps.length === 0) { addLog('Add steps before saving', 'warn'); return; }
   const payload = { name, url, steps: builderSteps };
   const r = await fetch('/profiles', {
     method: 'POST',
@@ -471,7 +472,9 @@ async function saveBuilderProfile() {
     body: JSON.stringify(payload)
   });
   if (r.ok) {
-    addLog(`Profile "${name}" saved`, 'info');
+    const stepCount = builderSteps.length;
+    addLog(`✓ Profile "${name}" saved with ${stepCount} step(s)`, 'success');
+    addLog(`📋 Switch to Automation tab, enter a prompt, and click Run to execute`, 'info');
     await loadProfiles();
     // Re-select the just-saved profile in the builder dropdown
     const sel = document.getElementById('builderProfileSelect');
@@ -481,6 +484,35 @@ async function saveBuilderProfile() {
     }
     // Update the automation tab indicator
     updateActiveFlowIndicator(name);
+  } else {
+    addLog('Failed to save profile', 'error');
+  }
+}
+
+async function saveAsEndpoint() {
+  const name = document.getElementById('builderName').value.trim();
+  const url = document.getElementById('builderUrl').value.trim();
+  if (!name) { addLog('Enter an endpoint name', 'warn'); return; }
+  if (builderSteps.length === 0) { addLog('Add steps before creating endpoint', 'warn'); return; }
+  const payload = { name, url, steps: builderSteps };
+  const r = await fetch('/profiles', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload)
+  });
+  if (r.ok) {
+    const stepCount = builderSteps.length;
+    const result = await r.json();
+    const profile = profiles.find(p => p.slug === result.slug || p.name === name);
+    addLog(`✓ Endpoint "${name}" created with ${stepCount} step(s) ready to execute`, 'success');
+    if (profile) {
+      updateProfileEndpoint(profile);
+      addLog(`🔗 API Endpoint: POST/GET /run/${profile.slug}?prompt=<your-prompt>`, 'info');
+      addLog(`These ${stepCount} step(s) will execute when the endpoint is called`, 'info');
+    }
+    await loadProfiles();
+  } else {
+    addLog('Failed to create endpoint', 'error');
   }
 }
 
