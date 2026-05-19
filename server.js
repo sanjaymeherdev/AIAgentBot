@@ -513,8 +513,8 @@ async function captureLastChatText(page) {
   }
 }
 
-const DEEPSEEK_MONITOR_SCRIPT_PATH = path.join(__dirname, 'public', 'js', 'deepseek.js');
-const QWEN_MONITOR_SCRIPT_PATH = path.join(__dirname, 'public', 'js', 'qwenoutput.js');
+const DEEPSEEK_MONITOR_SCRIPT_PATH = path.join(__dirname, 'js', 'deepseek.js');
+const QWEN_MONITOR_SCRIPT_PATH = path.join(__dirname, 'js', 'qwenoutput.js');
 let deepseekMonitorScript = null;
 let qwenMonitorScript = null;
 
