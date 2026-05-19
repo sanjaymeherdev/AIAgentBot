@@ -9,6 +9,7 @@ let builderMode = false;
 let builderDefaultAction = 'click';
 let sse = null;
 let sortable = null;
+let currentRunnableProfile = null; // (deprecated)
 
 const BROWSER_W = 1280;
 const BROWSER_H = 720;
@@ -486,7 +487,6 @@ async function saveBuilderProfile() {
     updateActiveFlowIndicator(name);
   } else {
     addLog('Failed to save profile', 'error');
-  }
 }
 
 async function saveAsEndpoint() {
