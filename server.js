@@ -793,17 +793,6 @@ async function runProfile(profileName, prompt) {
     broadcast('status', { running: true });
     await ensurePage();
     const sessionLoaded = await loadSession(profileName);
-    if (profile.url) {
-      let currentUrl = '';
-      try { currentUrl = page.url(); } catch (_) {}
-      const targetHost = new URL(profile.url).hostname;
-      if (!currentUrl.includes(targetHost)) {
-        log(`Navigating to ${profile.url}`);
-        await page.goto(profile.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-        if (!sessionLoaded) await new Promise(r => setTimeout(r, 3000));
-        await saveSession(profileName);
-      }
-    }
     for (let i = 0; i < profile.steps.length; i++) {
       if (shouldStop) { log('⏹ Stopped by user', 'warn'); break; }
       const step = profile.steps[i];
