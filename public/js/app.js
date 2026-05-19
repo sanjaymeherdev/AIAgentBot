@@ -154,6 +154,27 @@ async function sendTextWithEnter(text) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ key: 'Enter' })
     });
+
+    if (document.getElementById('deepseekMonitorToggle')?.checked) {
+      addLog('Waiting for DeepSeek response...', 'info');
+      try {
+        const r = await fetch('/browser/deepseek-monitor', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ timeout: 60000, interval: 500, stableThreshold: 3 })
+        });
+        const data = await r.json();
+        if (r.ok && data.result?.text) {
+          setResponse(data.result.text);
+          addLog('DeepSeek response captured', 'success');
+        } else {
+          addLog('DeepSeek monitor completed without captured text', 'warn');
+        }
+      } catch (err) {
+        addLog('DeepSeek monitor failed: ' + err.message, 'error');
+      }
+    }
+
     if (document.getElementById('liveToggle')?.checked) {
       setTimeout(refreshScreenshot, 400);
     }
@@ -274,6 +295,7 @@ async function loadProfiles() {
     const r = await fetch('/profiles');
     profiles = await r.json();
     renderProfileSelect();
+    renderBuilderProfileSelect();
     if (profiles.length) {
       loadBuilderFromProfile(profiles[0]);
       updateProfileEndpoint(profiles[0]);
@@ -282,6 +304,30 @@ async function loadProfiles() {
   } catch (e) {
     addLog('Failed to load profiles: ' + e.message, 'error');
   }
+}
+
+function renderBuilderProfileSelect() {
+  const sel = document.getElementById('builderProfileSelect');
+  if (!sel) return;
+  sel.innerHTML = profiles.length
+    ? profiles.map(p => `<option value="${escAttr(p.slug)}">${escHtml(p.name)}</option>`).join('')
+    : '<option value="">No saved flows</option>';
+}
+
+function loadSelectedBuilderProfile() {
+  const slug = document.getElementById('builderProfileSelect')?.value;
+  if (!slug) {
+    addLog('No saved flow selected', 'warn');
+    return;
+  }
+  const profile = profiles.find(p => p.slug === slug);
+  if (!profile) {
+    addLog('Selected flow not found', 'error');
+    return;
+  }
+  loadBuilderFromProfile(profile);
+  document.getElementById('builderName').value = profile.name;
+  addLog(`Loaded flow "${profile.name}"`, 'info');
 }
 
 function updateProfileEndpoint(profile) {
@@ -634,13 +680,22 @@ function renderStepEditorFields() {
       `;
       break;
     case 'type':
-    case 'send': // ✅ Send action now has same fields as type
       html = `
         <div><label>Text (use {{prompt}} for dynamic prompt)</label>
           <textarea id="edit-text" rows="3">${escHtml(step.text || '')}</textarea>
         </div>
         <div><label>Delay (ms per char)</label><input id="edit-delay" type="number" value="${step.delay || 30}" /></div>
-        ${action === 'send' ? '<div style="font-size:11px;color:#888;margin-top:4px">💡 This will type the text (if any) then press Enter</div>' : ''}
+      `;
+      break;
+    case 'send':
+      html = `
+        <div><label>Text (use {{prompt}} for dynamic prompt)</label>
+          <textarea id="edit-text" rows="3">${escHtml(step.text || '')}</textarea>
+        </div>
+        <div><label>Delay (ms per char)</label><input id="edit-delay" type="number" value="${step.delay || 30}" /></div>
+        <div><label><input id="edit-monitorDeepSeek" type="checkbox" ${step.monitorDeepSeek ? 'checked' : ''} /> Monitor DeepSeek response after send</label></div>
+        <div><label><input id="edit-monitorQwen" type="checkbox" ${step.monitorQwen ? 'checked' : ''} /> Monitor Qwen response after send</label></div>
+        <div style="font-size:11px;color:#888;margin-top:4px">💡 This will type the text (if any) then press Enter.</div>
       `;
       break;
     case 'keypress':
@@ -696,8 +751,12 @@ function saveStepEdit() {
       step.x = gn('edit-x'); step.y = gn('edit-y');
       step.deltaX = gn('edit-deltaX'); step.deltaY = gn('edit-deltaY'); break;
     case 'type':
-    case 'send': // ✅ Save text and delay for send action
       step.text = g('edit-text'); step.delay = gn('edit-delay'); break;
+    case 'send': // ✅ Save text and delay for send action
+      step.text = g('edit-text'); step.delay = gn('edit-delay');
+      step.monitorDeepSeek = gb('edit-monitorDeepSeek');
+      step.monitorQwen = gb('edit-monitorQwen');
+      break;
     case 'keypress':
       step.key = g('edit-key'); break;
     case 'wait':

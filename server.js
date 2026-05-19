@@ -171,7 +171,7 @@ function getDefaultProfiles() {
         { id: 1, action: 'click', x: 640, y: 650, label: 'Click input' },
         { id: 2, action: 'type', text: '{{prompt}}', delay: 30, label: 'Type prompt' },
         { id: 3, action: 'wait', ms: 400, label: 'Pause' },
-        { id: 4, action: 'send', text: '', delay: 30, label: 'Send via Enter' },
+        { id: 4, action: 'send', text: '', delay: 30, label: 'Send via Enter', monitorQwen: true },
         { id: 5, action: 'wait', ms: 5000, label: 'Wait for response' },
         { id: 6, action: 'copy', selector: '[class*=\"message\"]:last-child', label: 'Copy response', polling: true }
       ]
@@ -513,6 +513,33 @@ async function captureLastChatText(page) {
   }
 }
 
+const DEEPSEEK_MONITOR_SCRIPT_PATH = path.join(__dirname, 'public', 'js', 'deepseek.js');
+const QWEN_MONITOR_SCRIPT_PATH = path.join(__dirname, 'public', 'js', 'qwenoutput.js');
+let deepseekMonitorScript = null;
+let qwenMonitorScript = null;
+
+async function loadDeepseekMonitorScript() {
+  if (deepseekMonitorScript) return deepseekMonitorScript;
+  deepseekMonitorScript = fs.readFileSync(DEEPSEEK_MONITOR_SCRIPT_PATH, 'utf8');
+  return deepseekMonitorScript;
+}
+
+async function loadQwenMonitorScript() {
+  if (qwenMonitorScript) return qwenMonitorScript;
+  qwenMonitorScript = fs.readFileSync(QWEN_MONITOR_SCRIPT_PATH, 'utf8');
+  return qwenMonitorScript;
+}
+
+async function runDeepSeekMonitor(options = {}) {
+  const script = await loadDeepseekMonitorScript();
+  return await page.evaluate(new Function('options', `${script}\nreturn waitForDeepSeekResponse(options);`), options);
+}
+
+async function runQwenMonitor(options = {}) {
+  const script = await loadQwenMonitorScript();
+  return await page.evaluate(new Function('options', `${script}\nreturn waitForQwenResponse(options);`), options);
+}
+
 async function executeStep(step, context) {
   const p = page;
   const label = step.label ? `[${step.label}]` : '';
@@ -551,6 +578,27 @@ async function executeStep(step, context) {
         }
         await p.keyboard.press('Enter');
         log(`Send complete${label}`);
+        const autoDeepSeek = !step.monitorDeepSeek && !step.monitorQwen && /deepseek\.com/i.test(context.profileUrl);
+        const autoQwen = !step.monitorDeepSeek && !step.monitorQwen && /(qianwen|tongyi\.aliyun\.com|qwen)/i.test(context.profileUrl);
+        const shouldMonitorDeepSeek = Boolean(step.monitorDeepSeek) || autoDeepSeek;
+        const shouldMonitorQwen = Boolean(step.monitorQwen) || autoQwen;
+        if (shouldMonitorDeepSeek || shouldMonitorQwen) {
+          const useQwen = Boolean(step.monitorQwen);
+          const executor = useQwen ? runQwenMonitor : runDeepSeekMonitor;
+          log(`Waiting for ${useQwen ? 'Qwen' : 'DeepSeek'} response${label}`);
+          const result = await executor({
+            timeout: step.timeout || 0,
+            interval: step.interval || 500,
+            stableThreshold: step.stableThreshold || 3
+          });
+          if (result && result.text) {
+            context.result = normalizeExtractedText(result.text, context);
+            broadcast('response', { text: context.result });
+            log(`✅ ${useQwen ? 'Qwen' : 'DeepSeek'} response captured ${context.result.length} chars`);
+          } else {
+            log(`${useQwen ? 'Qwen' : 'DeepSeek'} monitor ended without captured text`, 'warn');
+          }
+        }
         break;
       }
 
@@ -686,7 +734,7 @@ async function runProfile(profileName, prompt) {
   const runStart = Date.now();
   let runStatus = 'success';
   let runError = null;
-  const context = { prompt, result: '' };
+  const context = { prompt, result: '', profileUrl: profile.url || '' };
   try {
     log(`▶ Starting: ${profileName}`);
     broadcast('status', { running: true });
@@ -859,6 +907,24 @@ app.post('/browser/evaluate', async (req, res) => {
   } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.post('/browser/deepseek-monitor', async (req, res) => {
+  try {
+    const options = req.body || {};
+    await ensurePage();
+    const result = await runDeepSeekMonitor(options);
+    res.json({ ok: true, result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
+app.post('/browser/qwen-monitor', async (req, res) => {
+  try {
+    const options = req.body || {};
+    await ensurePage();
+    const result = await runQwenMonitor(options);
+    res.json({ ok: true, result });
+  } catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 // Profiles
 app.get('/profiles', async (req, res) => {
   try {
@@ -929,7 +995,39 @@ app.post('/run/:slug', requireApiKey, async (req, res) => {
   }
 });
 
+app.post('/api/:slug', requireApiKey, async (req, res) => {
+  if (isRunning) return res.status(409).json({ error: 'Already running' });
+  const slug = decodeURIComponent(req.params.slug);
+  const { prompt } = req.body;
+  if (!prompt) return res.status(400).json({ error: 'prompt required' });
+  try {
+    const reply = await runProfileBySlug(slug, prompt);
+    const profiles = await loadProfiles();
+    const profile = profiles.find(p => p.slug === slug);
+    saveLastResponse(reply, profile?.name || slug, prompt);
+    res.json({ ok: true, reply });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
 app.get('/run/:slug', requireApiKey, async (req, res) => {
+  if (isRunning) return res.status(409).json({ error: 'Already running' });
+  const slug = decodeURIComponent(req.params.slug);
+  const prompt = req.query.prompt || '';
+  if (!prompt) return res.status(400).json({ error: 'prompt query required' });
+  try {
+    const reply = await runProfileBySlug(slug, prompt);
+    const profiles = await loadProfiles();
+    const profile = profiles.find(p => p.slug === slug);
+    saveLastResponse(reply, profile?.name || slug, prompt);
+    res.json({ ok: true, reply });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+
+app.get('/api/:slug', requireApiKey, async (req, res) => {
   if (isRunning) return res.status(409).json({ error: 'Already running' });
   const slug = decodeURIComponent(req.params.slug);
   const prompt = req.query.prompt || '';
@@ -1068,6 +1166,8 @@ app.get('/docs', async (req, res) => {
   <ul>
     <li><code>POST /run/{slug}</code> with JSON <code>{"prompt":"..."}</code></li>
     <li><code>GET /run/{slug}?prompt=...</code></li>
+    <li><code>POST /api/{slug}</code> with JSON <code>{"prompt":"..."}</code></li>
+    <li><code>GET /api/{slug}?prompt=...</code></li>
     <li><code>GET /endpoints</code></li>
     <li><code>GET /history?limit=20</code> (requires DB)</li>
   </ul>

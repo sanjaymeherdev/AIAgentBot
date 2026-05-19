@@ -126,6 +126,12 @@
         <button onclick="sendManualKey('Backspace')" class="btn-sm">⌫</button>
       </div>
       <div class="ctrl-row">
+        <label class="toggle-wrap" style="flex:1;">
+          <input type="checkbox" id="deepseekMonitorToggle" />
+          Monitor DeepSeek response after send
+        </label>
+      </div>
+      <div class="ctrl-row">
         <button onclick="sendScroll(-300)" class="btn-sm">↑ Scroll Up</button>
         <button onclick="sendScroll(300)" class="btn-sm">↓ Scroll Down</button>
         <button onclick="refreshScreenshot()" class="btn-sm">⟳ Refresh</button>
@@ -194,6 +200,10 @@
     <!-- BUILDER TAB -->
     <div class="tab-content" id="tab-builder">
       <div class="builder-top">
+        <div class="field-row">
+          <select id="builderProfileSelect" style="flex:1; min-width:0;"></select>
+          <button class="btn-sm" onclick="loadSelectedBuilderProfile()">Load</button>
+        </div>
         <div class="field-row">
           <input type="text" id="builderName" placeholder="Profile name" />
           <input type="text" id="builderUrl" placeholder="https://..." />
