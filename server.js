@@ -805,11 +805,23 @@ async function executeStep(step, context) {
 }
 
 // ── RUN PROFILE ───────────────────────────────────────────
+app.post('/reset', (req, res) => {
+  isRunning = false;
+  shouldStop = false;
+  broadcast('status', { running: false });
+  log('🔄 State reset manually', 'warn');
+  res.json({ ok: true });
+});
 
 async function runProfile(profileName, prompt) {
+  isRunning = true;
+  shouldStop = false;
   const profiles = await loadProfiles();
   const profile = profiles.find(p => p.name === profileName);
-  if (!profile) throw new Error(`Profile not found: ${profileName}`);
+  if (!profile) {
+    isRunning = false;
+    throw new Error(`Profile not found: ${profileName}`);
+  }
 
   const runStart = Date.now();
   let runStatus = 'success';

@@ -821,3 +821,15 @@ function escHtml(s) {
 function escAttr(s) {
   return String(s || '').replace(/"/g, '&quot;');
 }
+
+window.addEventListener('keydown', e => {
+  if (e.ctrlKey && e.key && e.key.toLowerCase() === 'k') {
+    e.preventDefault();
+    fetch('/reset', { method: 'POST' })
+      .then(() => {
+        setRunning(false);
+        addLog('🔄 State reset via Ctrl+K', 'warn');
+      })
+      .catch(err => addLog('Reset failed: ' + err.message, 'error'));
+  }
+});
