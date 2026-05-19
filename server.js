@@ -17,10 +17,27 @@ const stealth = require('puppeteer-extra-plugin-stealth');
 puppeteerExtra.use(stealth());
 let dbClient = null;
 
+// ── DATABASE ──────────────────────────────────────────────
+
 async function initDatabase() {
   if (!USE_POSTGRES) return;
   dbClient = new Client({ connectionString: DATABASE_URL, ssl: { rejectUnauthorized: false } });
   await dbClient.connect();
+
+  // Prevent unhandled error crash on connection drop (Neon drops idle connections)
+  dbClient.on('error', (err) => {
+    log(`DB connection error: ${err.message}`, 'warn');
+    dbClient = null;
+    setTimeout(async () => {
+      try {
+        await initDatabase();
+        log('DB reconnected', 'info');
+      } catch (e) {
+        log(`DB reconnect failed: ${e.message}`, 'error');
+      }
+    }, 5000);
+  });
+
   await dbClient.query(`
     CREATE TABLE IF NOT EXISTS profiles (
       slug text PRIMARY KEY,
@@ -51,10 +68,16 @@ async function initDatabase() {
 }
 
 async function ensureProfileStore() {
+  if (!dbClient && USE_POSTGRES) {
+    log('DB not ready for ensureProfileStore, skipping', 'warn');
+    return;
+  }
   if (USE_POSTGRES) {
-    const { rows } = await dbClient.query('SELECT count(*)::int AS count FROM profiles');
-    if (rows[0].count === 0) {
-      await saveProfiles(getDefaultProfiles());
+    try {
+      const { rows } = await dbClient.query('SELECT count(*)::int AS count FROM profiles');
+      if (rows[0].count === 0) await saveProfiles(getDefaultProfiles());
+    } catch (e) {
+      log(`ensureProfileStore failed: ${e.message}`, 'warn');
     }
   } else if (!fs.existsSync(PROFILES_FILE)) {
     await saveProfiles(getDefaultProfiles());
@@ -62,6 +85,7 @@ async function ensureProfileStore() {
 }
 
 async function loadProfilesFromDb() {
+  if (!dbClient) throw new Error('DB not connected');
   const result = await dbClient.query('SELECT slug, name, url, steps FROM profiles ORDER BY name');
   return assignProfileSlugs(result.rows.map(row => ({
     slug: row.slug,
@@ -72,6 +96,7 @@ async function loadProfilesFromDb() {
 }
 
 async function saveProfilesToDb(profiles) {
+  if (!dbClient) throw new Error('DB not connected');
   const sanitized = profiles.map(profile => ({ ...profile, slug: slugify(profile.name) }));
   await dbClient.query('BEGIN');
   try {
@@ -81,7 +106,7 @@ async function saveProfilesToDb(profiles) {
          VALUES ($1, $2, $3, $4, now())
          ON CONFLICT (slug) DO UPDATE
          SET name = EXCLUDED.name, url = EXCLUDED.url, steps = EXCLUDED.steps, updated_at = now()`,
-        [profile.slug, profile.name, profile.url, profile.steps]
+        [profile.slug, profile.name, profile.url, JSON.stringify(profile.steps)]
       );
     }
     const slugs = sanitized.map(p => p.slug);
@@ -99,16 +124,18 @@ async function saveProfilesToDb(profiles) {
 }
 
 async function loadSessionFromDb(profileName) {
+  if (!dbClient) throw new Error('DB not connected');
   const result = await dbClient.query('SELECT cookies, storage FROM sessions WHERE profile_name = $1', [profileName]);
   return result.rows[0] || null;
 }
 
 async function saveSessionToDb(profileName, cookies, storage) {
+  if (!dbClient) throw new Error('DB not connected');
   await dbClient.query(
     `INSERT INTO sessions (profile_name, cookies, storage, updated_at)
      VALUES ($1, $2, $3, now())
      ON CONFLICT (profile_name) DO UPDATE SET cookies = EXCLUDED.cookies, storage = EXCLUDED.storage, updated_at = now()`,
-    [profileName, cookies, storage]
+    [profileName, JSON.stringify(cookies), JSON.stringify(storage)]
   );
 }
 
@@ -124,6 +151,8 @@ async function recordRunHistory({ profileSlug, profileName, prompt, result, stat
     log(`Run history save failed: ${e.message}`, 'warn');
   }
 }
+
+// ── HELPERS ───────────────────────────────────────────────
 
 function slugify(name) {
   return String(name || '')
@@ -173,13 +202,14 @@ function getDefaultProfiles() {
         { id: 3, action: 'wait', ms: 400, label: 'Pause' },
         { id: 4, action: 'send', text: '', delay: 30, label: 'Send via Enter', monitorQwen: true },
         { id: 5, action: 'wait', ms: 5000, label: 'Wait for response' },
-        { id: 6, action: 'copy', selector: '[class*=\"message\"]:last-child', label: 'Copy response', polling: true }
+        { id: 6, action: 'copy', selector: '[class*="message"]:last-child', label: 'Copy response', polling: true }
       ]
     }
   ]);
 }
 
-// Session storage path
+// ── SESSION ───────────────────────────────────────────────
+
 const SESSION_DIR = path.join(__dirname, 'sessions');
 if (!fs.existsSync(SESSION_DIR)) fs.mkdirSync(SESSION_DIR);
 
@@ -190,13 +220,13 @@ async function saveSession(profileName) {
     session: Object.fromEntries(Object.entries(sessionStorage))
   }));
 
-  if (USE_POSTGRES) {
+  if (USE_POSTGRES && dbClient) {
     try {
       await saveSessionToDb(profileName, cookies, storage);
       log(`💾 Session saved to DB for ${profileName}`);
       return;
     } catch (e) {
-      log(`DB session save failed: ${e.message}`, 'warn');
+      log(`DB session save failed: ${e.message}, falling back to file`, 'warn');
     }
   }
 
@@ -210,11 +240,11 @@ async function saveSession(profileName) {
 async function loadSession(profileName) {
   let data = null;
 
-  if (USE_POSTGRES) {
+  if (USE_POSTGRES && dbClient) {
     try {
       data = await loadSessionFromDb(profileName);
     } catch (e) {
-      log(`DB session load failed: ${e.message}`, 'warn');
+      log(`DB session load failed: ${e.message}, trying file`, 'warn');
     }
   }
 
@@ -233,7 +263,47 @@ async function loadSession(profileName) {
   log(`🔓 Session loaded for ${profileName}`);
   return true;
 }
-// ✅ Middleware for Replit compatibility
+
+// ── PROFILES ──────────────────────────────────────────────
+
+async function loadProfiles() {
+  if (USE_POSTGRES && dbClient) {
+    try {
+      const profiles = await loadProfilesFromDb();
+      if (profiles.length) return profiles;
+    } catch (e) {
+      log(`DB profile load failed: ${e.message}, falling back to file`, 'warn');
+    }
+  }
+
+  try {
+    if (fs.existsSync(PROFILES_FILE)) {
+      let raw = fs.readFileSync(PROFILES_FILE, 'utf8');
+      raw = raw.replace(/"(\w+)\s*"\s*:/g, '"$1":');
+      const profiles = JSON.parse(raw);
+      return assignProfileSlugs(Array.isArray(profiles) ? profiles : []);
+    }
+  } catch (e) {
+    log(`Error loading profiles from file: ${e.message}`, 'error');
+  }
+  return getDefaultProfiles();
+}
+
+async function saveProfiles(profiles) {
+  const sanitized = profiles.map(profile => ({ ...profile, slug: slugify(profile.name) }));
+  if (USE_POSTGRES && dbClient) {
+    try {
+      await saveProfilesToDb(sanitized);
+      return;
+    } catch (e) {
+      log(`DB profile save failed: ${e.message}, falling back to file`, 'warn');
+    }
+  }
+  fs.writeFileSync(PROFILES_FILE, JSON.stringify(sanitized, null, 2));
+}
+
+// ── MIDDLEWARE ────────────────────────────────────────────
+
 app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'ALLOWALL');
   res.setHeader('Content-Security-Policy', "default-src 'self' 'unsafe-inline' 'unsafe-eval' https: data:;");
@@ -275,6 +345,8 @@ app.get('/', (req, res) => {
   res.sendFile(path.join(STATIC_ROOT, 'index.html'));
 });
 
+// ── STATE ─────────────────────────────────────────────────
+
 let browser = null;
 let page = null;
 let isRunning = false;
@@ -285,7 +357,9 @@ let lastCopyBotResponseEvent = null;
 const PROFILES_FILE = path.join(__dirname, 'profiles.json');
 const VIEWPORT = { width: 1280, height: 720 };
 const logClients = new Set();
-const PING_INTERVAL = process.env.PING_INTERVAL || 5 * 60 * 1000; // 5 minutes default
+const PING_INTERVAL = process.env.PING_INTERVAL || 5 * 60 * 1000;
+
+// ── BROADCAST / LOG ───────────────────────────────────────
 
 function broadcast(type, data) {
   const msg = `data: ${JSON.stringify({ type, ...data })}\n\n`;
@@ -298,6 +372,8 @@ function log(message, level = 'info') {
   console.log(`[${level.toUpperCase()}] ${message}`);
   broadcast('log', { message, level, time: new Date().toISOString() });
 }
+
+// ── SELF PINGER ───────────────────────────────────────────
 
 function startSelfPinger() {
   if (pingInterval) clearInterval(pingInterval);
@@ -324,6 +400,8 @@ function startSelfPinger() {
   }, PING_INTERVAL);
   log(`✅ Self-pinger started (interval: ${PING_INTERVAL / 1000}s, url: ${pingUrl})`);
 }
+
+// ── RESPONSE HELPERS ──────────────────────────────────────
 
 function saveLastResponse(text, profileName, prompt) {
   lastResponse = {
@@ -354,51 +432,13 @@ function normalizeExtractedText(text, context) {
   return cleaned;
 }
 
-async function loadProfiles() {
-  if (USE_POSTGRES) {
-    try {
-      const profiles = await loadProfilesFromDb();
-      if (profiles.length) return profiles;
-    } catch (e) {
-      log(`DB profile load failed: ${e.message}`, 'error');
-    }
-  }
-
-  try {
-    if (fs.existsSync(PROFILES_FILE)) {
-      let raw = fs.readFileSync(PROFILES_FILE, 'utf8');
-      raw = raw.replace(/"(\w+)\s*"\s*:/g, '"$1":');
-      const profiles = JSON.parse(raw);
-      return assignProfileSlugs(Array.isArray(profiles) ? profiles : []);
-    }
-  } catch (e) {
-    log(`Error loading profiles: ${e.message}`, 'error');
-  }
-  return getDefaultProfiles();
-}
-
-async function saveProfiles(profiles) {
-  const sanitized = profiles.map(profile => ({ ...profile, slug: slugify(profile.name) }));
-  if (USE_POSTGRES) {
-    try {
-      await saveProfilesToDb(sanitized);
-      return;
-    } catch (e) {
-      log(`DB profile save failed: ${e.message}`, 'error');
-    }
-  }
-  fs.writeFileSync(PROFILES_FILE, JSON.stringify(sanitized, null, 2));
-}
+// ── BROWSER ───────────────────────────────────────────────
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
 
 function getChromiumPath() {
-  if (EXECUTABLE_PATH) {
-    return EXECUTABLE_PATH;
-  }
-  if (process.env.RENDER) {
-    return '/usr/bin/chromium';
-  }
+  if (EXECUTABLE_PATH) return EXECUTABLE_PATH;
+  if (process.env.RENDER) return '/usr/bin/chromium';
   try {
     const nixPath = execSync('ls -d /nix/store/*chromium-* 2>/dev/null | head -n 1').toString().trim();
     if (nixPath) return `${nixPath}/bin/chromium`;
@@ -513,8 +553,17 @@ async function captureLastChatText(page) {
   }
 }
 
-const DEEPSEEK_MONITOR_SCRIPT_PATH = path.join(__dirname, 'js', 'deepseek.js');
-const QWEN_MONITOR_SCRIPT_PATH = path.join(__dirname, 'js', 'qwenoutput.js');
+// ── MONITOR SCRIPTS ───────────────────────────────────────
+// Works on both Render (js/ at root) and Replit (public/js/)
+
+const DEEPSEEK_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'js', 'deepseek.js'))
+  ? path.join(__dirname, 'js', 'deepseek.js')
+  : path.join(__dirname, 'public', 'js', 'deepseek.js');
+
+const QWEN_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'js', 'qwenoutput.js'))
+  ? path.join(__dirname, 'js', 'qwenoutput.js')
+  : path.join(__dirname, 'public', 'js', 'qwenoutput.js');
+
 let deepseekMonitorScript = null;
 let qwenMonitorScript = null;
 
@@ -539,6 +588,8 @@ async function runQwenMonitor(options = {}) {
   const script = await loadQwenMonitorScript();
   return await page.evaluate(new Function('options', `${script}\nreturn waitForQwenResponse(options);`), options);
 }
+
+// ── STEP EXECUTOR ─────────────────────────────────────────
 
 async function executeStep(step, context) {
   const p = page;
@@ -583,7 +634,7 @@ async function executeStep(step, context) {
         const shouldMonitorDeepSeek = Boolean(step.monitorDeepSeek) || autoDeepSeek;
         const shouldMonitorQwen = Boolean(step.monitorQwen) || autoQwen;
         if (shouldMonitorDeepSeek || shouldMonitorQwen) {
-          const useQwen = Boolean(step.monitorQwen);
+          const useQwen = Boolean(step.monitorQwen) || autoQwen;
           const executor = useQwen ? runQwenMonitor : runDeepSeekMonitor;
           log(`Waiting for ${useQwen ? 'Qwen' : 'DeepSeek'} response${label}`);
           const result = await executor({
@@ -726,6 +777,8 @@ async function executeStep(step, context) {
   }
 }
 
+// ── RUN PROFILE ───────────────────────────────────────────
+
 async function runProfile(profileName, prompt) {
   const profiles = await loadProfiles();
   const profile = profiles.find(p => p.name === profileName);
@@ -740,17 +793,17 @@ async function runProfile(profileName, prompt) {
     broadcast('status', { running: true });
     await ensurePage();
     const sessionLoaded = await loadSession(profileName);
-if (profile.url) {
-  let currentUrl = '';
-  try { currentUrl = page.url(); } catch (_) {}
-  const targetHost = new URL(profile.url).hostname;
-  if (!currentUrl.includes(targetHost)) {
-    log(`Navigating to ${profile.url}`);
-    await page.goto(profile.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    if (!sessionLoaded) await new Promise(r => setTimeout(r, 3000)); // Wait for auth check
-    await saveSession(profileName);
-  }
-}
+    if (profile.url) {
+      let currentUrl = '';
+      try { currentUrl = page.url(); } catch (_) {}
+      const targetHost = new URL(profile.url).hostname;
+      if (!currentUrl.includes(targetHost)) {
+        log(`Navigating to ${profile.url}`);
+        await page.goto(profile.url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+        if (!sessionLoaded) await new Promise(r => setTimeout(r, 3000));
+        await saveSession(profileName);
+      }
+    }
     for (let i = 0; i < profile.steps.length; i++) {
       if (shouldStop) { log('⏹ Stopped by user', 'warn'); break; }
       const step = profile.steps[i];
@@ -780,6 +833,7 @@ if (profile.url) {
 }
 
 // ── ROUTES ────────────────────────────────────────────────
+
 app.get('/screenshot', async (req, res) => {
   try {
     await ensurePage();
@@ -934,6 +988,7 @@ app.get('/profiles', async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 app.post('/profiles', requireApiKey, async (req, res) => {
   try {
     const profiles = await loadProfiles();
@@ -949,6 +1004,7 @@ app.post('/profiles', requireApiKey, async (req, res) => {
     res.status(500).json({ error: e.message });
   }
 });
+
 app.delete('/profiles/:name', requireApiKey, async (req, res) => {
   try {
     let profiles = await loadProfiles();
@@ -1064,11 +1120,11 @@ app.get('/status', (req, res) => {
   res.json({
     running: isRunning,
     url: page ? page.url() : null,
-    browserConnected: !!(browser && browser.isConnected())
+    browserConnected: !!(browser && browser.isConnected()),
+    dbConnected: !!(USE_POSTGRES && dbClient)
   });
 });
 
-// Get Last Response
 app.get('/last-response', (req, res) => {
   res.json(lastResponse);
 });
@@ -1086,7 +1142,6 @@ app.get('/copy-output', (req, res) => {
   });
 });
 
-// Download Last Response as File
 app.get('/download-response', (req, res) => {
   const { format = 'txt' } = req.query;
   const timestamp = lastResponse.timestamp ? new Date(lastResponse.timestamp).toLocaleString() : 'N/A';
@@ -1131,6 +1186,7 @@ app.get('/endpoints', requireApiKey, async (req, res) => {
 
 app.get('/history', requireApiKey, async (req, res) => {
   if (!USE_POSTGRES) return res.status(404).json({ error: 'History is not enabled without DATABASE_URL' });
+  if (!dbClient) return res.status(503).json({ error: 'DB reconnecting, try again shortly' });
   const limit = Math.min(Math.max(Number(req.query.limit) || 20, 1), 100);
   try {
     const result = await dbClient.query(
@@ -1194,19 +1250,17 @@ app.get('/logs/stream', (req, res) => {
   req.on('close', () => logClients.delete(res));
 });
 
-// Start Server - Listen FIRST, then initialize browser in background
+// ── START ─────────────────────────────────────────────────
+
 (async () => {
   try {
     await initDatabase();
     await ensureProfileStore();
-    
-    // Start listening on port immediately (don't wait for browser)
+
     app.listen(PORT, '0.0.0.0', () => log(`Server running on port ${PORT}`));
-    
-    // Start self-pinger to prevent idle timeout
+
     startSelfPinger();
-    
-    // Initialize browser in background
+
     ensurePage()
       .then(() => log('Browser ready'))
       .catch(err => log(`Browser init failed: ${err.message}`, 'error'));
