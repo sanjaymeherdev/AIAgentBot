@@ -388,16 +388,22 @@ async function ensureBrowser() {
   const exePath = getChromiumPath();
   log(`Launching Chromium: ${exePath}`);
   browser = await puppeteerExtra.launch({
-  executablePath: exePath,
-  headless: true, // Use "new" for Chrome >= 112
-  args: [
-    '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
-    '--disable-gpu', '--single-process', '--disable-background-networking',
-    '--disable-sync', '--no-first-run', '--no-default-browser-check'
-  ],
-  defaultViewport: VIEWPORT,
-  ignoreDefaultArgs: ['--enable-automation', '--disable-extensions']
-});
+    executablePath: exePath,
+    headless: 'new',
+    args: [
+      '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
+      '--disable-gpu', '--disable-background-networking',
+      '--disable-sync', '--no-first-run', '--no-default-browser-check',
+      '--disable-background-timer-throttling',
+      '--disable-renderer-backgrounding',
+      '--disable-features=site-per-process,TranslateUI',
+      '--disable-software-rasterizer'
+    ],
+    defaultViewport: VIEWPORT,
+    ignoreDefaultArgs: ['--enable-automation', '--disable-extensions'],
+    pipe: true,
+    timeout: 60000
+  });
   browser.on('disconnected', () => { browser = null; page = null; log('Browser disconnected', 'warn'); });
 }
 
