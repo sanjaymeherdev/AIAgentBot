@@ -558,14 +558,13 @@ async function captureLastChatText(page) {
 // ── MONITOR SCRIPTS ───────────────────────────────────────
 // Works on both Render (js/ at root) and Replit (public/js/)
 
-const DEEPSEEK_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'js', 'deepseek.js'))
-  ? path.join(__dirname, 'js', 'deepseek.js')
-  : path.join(__dirname, 'public', 'js', 'deepseek.js');
+const DEEPSEEK_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'public', 'js', 'deepseek.js'))
+  ? path.join(__dirname, 'public', 'js', 'deepseek.js')
+  : path.join(__dirname, 'js', 'deepseek.js');
 
-const QWEN_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'js', 'qwenoutput.js'))
-  ? path.join(__dirname, 'js', 'qwenoutput.js')
-  : path.join(__dirname, 'public', 'js', 'qwenoutput.js');
-
+const QWEN_MONITOR_SCRIPT_PATH = fs.existsSync(path.join(__dirname, 'public', 'js', 'qwenoutput.js'))
+  ? path.join(__dirname, 'public', 'js', 'qwenoutput.js')
+  : path.join(__dirname, 'js', 'qwenoutput.js');
 let deepseekMonitorScript = null;
 let qwenMonitorScript = null;
 
