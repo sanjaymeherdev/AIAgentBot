@@ -586,7 +586,26 @@ async function runDeepSeekMonitor(options = {}) {
 
 async function runQwenMonitor(options = {}) {
   const script = await loadQwenMonitorScript();
-  return await page.evaluate(new Function('options', `${script}\nreturn waitForQwenResponse(options);`), options);
+  
+  // Wait for page to settle after navigation before injecting monitor
+  await new Promise(r => setTimeout(r, 2000));
+  
+  // Retry if context is destroyed by page navigation
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      return await page.evaluate(
+        new Function('options', `${script}\nreturn waitForQwenResponse(options);`),
+        options
+      );
+    } catch (err) {
+      if (err.message.includes('Execution context was destroyed') && attempt < 3) {
+        log(`Qwen context destroyed, waiting for new page to settle (attempt ${attempt})`, 'warn');
+        await new Promise(r => setTimeout(r, 3000));
+        continue;
+      }
+      throw err;
+    }
+  }
 }
 
 // ── STEP EXECUTOR ─────────────────────────────────────────
