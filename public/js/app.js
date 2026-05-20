@@ -894,3 +894,24 @@ window.addEventListener('keydown', e => {
       .catch(err => addLog('Reset failed: ' + err.message, 'error'));
   }
 });
+
+// Expose handlers to the global `window` so inline `onclick` attributes work
+try {
+  Object.assign(window, {
+    navigate,
+    sendManualKey,
+    refreshScreenshot,
+    toggleLive,
+    runAutomation,
+    stopAutomation,
+    copyResponse,
+    loadSelectedBuilderProfile,
+    saveBuilderProfile,
+    saveAsEndpoint,
+    loadBuilderProfile,
+    deleteBuilderProfile,
+    addManualStep
+  });
+} catch (e) {
+  // If any of these functions are not defined yet, ignore — they'll be available after load
+}
