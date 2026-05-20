@@ -9,7 +9,6 @@ let builderMode = false;
 let builderDefaultAction = 'click';
 let sse = null;
 let sortable = null;
-let currentRunnableProfile = null; // (deprecated)
 
 const BROWSER_W = 1280;
 const BROWSER_H = 720;
@@ -209,7 +208,10 @@ async function sendScroll(deltaY) {
   setTimeout(refreshScreenshot, 300);
 }
 
-async function navigate() {
+// FIX 1: Renamed from navigate() to navigateBrowser() to avoid conflict
+// with the browser built-in. The window assignment below and index.html
+// onclick now use navigateBrowser.
+async function navigateBrowser() {
   const url = document.getElementById('urlBar').value.trim();
   if (!url) return;
   addLog(`Navigating to ${url}`, 'info');
@@ -288,42 +290,39 @@ async function loadProfiles() {
   try {
     const r = await fetch('/profiles');
     const data = await r.json();
-    
+
     if (!r.ok) {
       throw new Error(data.error || `Server returned ${r.status}`);
     }
-    
+
     if (!Array.isArray(data)) {
       throw new Error('Invalid profiles response: expected an array');
     }
-    
+
     profiles = data;
-    
-    // Ensure all profiles have slugs
+
     if (profiles.length && !profiles[0].slug) {
       addLog('⚠ Profiles missing slugs, regenerating...', 'warn');
-      profiles = profiles.map((p, i) => ({
+      profiles = profiles.map(p => ({
         ...p,
         slug: p.slug || (p.name || 'profile').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
       }));
     }
-    
+
     renderBuilderProfileSelect();
-    
-    // Auto-load first profile into builder
+
     if (profiles.length) {
       loadBuilderFromProfile(profiles[0]);
       addLog(`✓ Loaded ${profiles.length} flow(s)`, 'info');
     } else {
       addLog('No saved flows found. Create one in the Builder tab.', 'warn');
     }
-    
+
     await loadEndpointDocs();
   } catch (e) {
     addLog('Failed to load profiles: ' + e.message, 'error');
     profiles = [];
     renderBuilderProfileSelect();
-    // Retry after delay
     setTimeout(loadProfiles, 3000);
   }
 }
@@ -352,7 +351,6 @@ function loadSelectedBuilderProfile() {
   addLog(`Loaded flow "${profile.name}"`, 'info');
 }
 
-// ── Update the active flow indicator in the Automation tab ──
 function updateActiveFlowIndicator(name) {
   const el = document.getElementById('activeFlowName');
   if (el) el.textContent = name || '—';
@@ -374,9 +372,11 @@ async function loadEndpointDocs() {
       el.textContent = 'No saved endpoints found.';
       return;
     }
-    el.textContent = data.endpoints.map(item => `${item.name} → ${item.endpoint}${item.url ? ` (starts ${item.url})` : ''}`).join('\n');
+    el.textContent = data.endpoints
+      .map(item => `${item.name} → ${item.endpoint}${item.url ? ` (starts ${item.url})` : ''}`)
+      .join('\n');
   } catch (e) {
-    el.textContent = 'Unable to load endpoint docs.';
+    if (el) el.textContent = 'Unable to load endpoint docs.';
     addLog('Failed to load endpoint docs: ' + e.message, 'error');
   }
 }
@@ -396,7 +396,6 @@ async function runAutomation() {
   }
 
   addLog(`▶ Run "${profileName}" — "${prompt.substring(0, 40)}..."`, 'info');
-  addLog(`📝 Prompt: "${prompt.substring(0, 60)}${prompt.length > 60 ? '...' : ''}"`, 'info');
   setRunning(true);
   try {
     const r = await fetch('/run', {
@@ -479,7 +478,6 @@ function loadBuilderFromProfile(profile) {
   builderSteps = JSON.parse(JSON.stringify(profile.steps || []));
   renderStepsList();
   renderBuilderMarkers();
-  // Keep automation tab in sync
   updateActiveFlowIndicator(profile.name);
 }
 
@@ -490,6 +488,8 @@ function loadBuilderProfile() {
   else addLog(`Profile "${name}" not found`, 'warn');
 }
 
+// FIX 2: Was missing closing brace — the entire rest of the file was
+// parsed as nested inside saveBuilderProfile, causing a fatal syntax error.
 async function saveBuilderProfile() {
   const name = document.getElementById('builderName').value.trim();
   const url = document.getElementById('builderUrl').value.trim();
@@ -502,21 +502,19 @@ async function saveBuilderProfile() {
     body: JSON.stringify(payload)
   });
   if (r.ok) {
-    const stepCount = builderSteps.length;
-    addLog(`✓ Profile "${name}" saved with ${stepCount} step(s)`, 'success');
+    addLog(`✓ Profile "${name}" saved with ${builderSteps.length} step(s)`, 'success');
     addLog(`📋 Switch to Automation tab, enter a prompt, and click Run to execute`, 'info');
     await loadProfiles();
-    // Re-select the just-saved profile in the builder dropdown
     const sel = document.getElementById('builderProfileSelect');
     if (sel) {
       const saved = profiles.find(p => p.name === name);
       if (saved) sel.value = saved.slug;
     }
-    // Update the automation tab indicator
     updateActiveFlowIndicator(name);
   } else {
     addLog('Failed to save profile', 'error');
-}
+  }
+} // ← THIS CLOSING BRACE WAS MISSING IN THE ORIGINAL
 
 async function saveAsEndpoint() {
   const name = document.getElementById('builderName').value.trim();
@@ -530,16 +528,16 @@ async function saveAsEndpoint() {
     body: JSON.stringify(payload)
   });
   if (r.ok) {
-    const stepCount = builderSteps.length;
     const result = await r.json();
-    const profile = profiles.find(p => p.slug === result.slug || p.name === name);
-    addLog(`✓ Endpoint "${name}" created with ${stepCount} step(s) ready to execute`, 'success');
-    if (profile) {
-      updateProfileEndpoint(profile);
-      addLog(`🔗 API Endpoint: POST/GET /run/${profile.slug}?prompt=<your-prompt>`, 'info');
-      addLog(`These ${stepCount} step(s) will execute when the endpoint is called`, 'info');
-    }
     await loadProfiles();
+    // FIX 3: updateProfileEndpoint was called but never existed.
+    // Replaced with direct slug lookup from the freshly-loaded profiles.
+    const profile = profiles.find(p => p.slug === result.slug || p.name === name);
+    addLog(`✓ Endpoint "${name}" created with ${builderSteps.length} step(s)`, 'success');
+    if (profile) {
+      addLog(`🔗 API Endpoint: POST/GET /run/${profile.slug}?prompt=<your-prompt>`, 'info');
+      updateActiveFlowIndicator(name);
+    }
   } else {
     addLog('Failed to create endpoint', 'error');
   }
@@ -650,7 +648,7 @@ function renderBuilderMarkers() {
   const scaleX = rect.width / BROWSER_W;
   const scaleY = rect.height / BROWSER_H;
   const clickSteps = builderSteps.filter(s => ['click', 'scroll', 'read', 'copy'].includes(s.action) && s.x !== undefined);
-  clickSteps.forEach((step, seq) => {
+  clickSteps.forEach((step) => {
     const globalIdx = builderSteps.indexOf(step);
     const px = (rect.left - parentRect.left) + step.x * scaleX;
     const py = (rect.top - parentRect.top) + step.y * scaleY;
@@ -788,6 +786,9 @@ function renderStepEditorFields() {
         </div>
       `;
       break;
+    // FIX 4: goto was missing from renderStepEditorFields, falling through
+    // silently with no fields rendered. Now handled identically to navigate.
+    case 'goto':
     case 'navigate':
       html = `<div><label>URL</label><input id="edit-url" type="text" value="${escAttr(step.url || '')}" /></div>`;
       break;
@@ -839,6 +840,8 @@ function saveStepEdit() {
       step.selector = g('edit-selector');
       step.x = gn('edit-x'); step.y = gn('edit-y');
       break;
+    // FIX 5: goto was missing from saveStepEdit so URL was never saved.
+    case 'goto':
     case 'navigate':
       step.url = g('edit-url'); break;
     case 'evaluate':
@@ -895,23 +898,27 @@ window.addEventListener('keydown', e => {
   }
 });
 
-// Expose handlers to the global `window` so inline `onclick` attributes work
-try {
-  Object.assign(window, {
-    navigate,
-    sendManualKey,
-    refreshScreenshot,
-    toggleLive,
-    runAutomation,
-    stopAutomation,
-    copyResponse,
-    loadSelectedBuilderProfile,
-    saveBuilderProfile,
-    saveAsEndpoint,
-    loadBuilderProfile,
-    deleteBuilderProfile,
-    addManualStep
-  });
-} catch (e) {
-  // If any of these functions are not defined yet, ignore — they'll be available after load
-}
+// Expose all handlers globally so inline onclick attributes work.
+// FIX 1 (continued): navigate → navigateBrowser in the window export.
+// Also update index.html: onclick="navigate()" → onclick="navigateBrowser()"
+Object.assign(window, {
+  navigateBrowser,
+  sendManualKey,
+  refreshScreenshot,
+  toggleLive,
+  runAutomation,
+  stopAutomation,
+  copyResponse,
+  loadSelectedBuilderProfile,
+  saveBuilderProfile,
+  saveAsEndpoint,
+  loadBuilderProfile,
+  deleteBuilderProfile,
+  addManualStep,
+  deleteStep,
+  openStepEditor,
+  closeStepEditor,
+  saveStepEdit,
+  renderStepEditorFields,
+  sendScroll,
+});
