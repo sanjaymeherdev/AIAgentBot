@@ -36,21 +36,33 @@ async function waitForDeepSeekResponse(options = {}) {
     return selectors.some(sel => !!document.querySelector(sel));
   }
 
+  function getMessageNodes() {
+    return messageSelectors.flatMap(sel => Array.from(document.querySelectorAll(sel)));
+  }
+
   function getLastMessageText() {
-    const nodes = messageSelectors.flatMap(sel => Array.from(document.querySelectorAll(sel)));
+    const nodes = getMessageNodes();
     if (!nodes.length) return '';
     const node = nodes[nodes.length - 1];
     return (node.innerText || node.textContent || '').trim();
   }
 
+  const initialResponseText = getLastMessageText();
+  const initialMessageCount = getMessageNodes().length;
+  let hasNewResponse = false;
+
   while (performance.now() - startTime < timeoutMs) {
     const stopButtonExists = exists(stopSelectors);
     const typingExists = exists(typingSelectors);
+    const nodes = getMessageNodes();
     const currentResponse = getLastMessageText();
     const currentLength = currentResponse.length;
-    const isGrowing = currentLength > state.lastResponseLength;
 
-    if (!stopButtonExists && !typingExists && currentLength > 0 && currentLength === state.lastResponseLength) {
+    if (currentResponse !== initialResponseText || nodes.length > initialMessageCount) {
+      hasNewResponse = true;
+    }
+
+    if (!stopButtonExists && !typingExists && currentLength > 0 && currentLength === state.lastResponseLength && hasNewResponse) {
       state.stableCount += 1;
     } else {
       state.stableCount = 0;
