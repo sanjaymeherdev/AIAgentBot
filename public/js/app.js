@@ -287,15 +287,44 @@ function toggleFloatingLogs(forceState) {
 async function loadProfiles() {
   try {
     const r = await fetch('/profiles');
-    profiles = await r.json();
+    const data = await r.json();
+    
+    if (!r.ok) {
+      throw new Error(data.error || `Server returned ${r.status}`);
+    }
+    
+    if (!Array.isArray(data)) {
+      throw new Error('Invalid profiles response: expected an array');
+    }
+    
+    profiles = data;
+    
+    // Ensure all profiles have slugs
+    if (profiles.length && !profiles[0].slug) {
+      addLog('⚠ Profiles missing slugs, regenerating...', 'warn');
+      profiles = profiles.map((p, i) => ({
+        ...p,
+        slug: p.slug || (p.name || 'profile').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '')
+      }));
+    }
+    
     renderBuilderProfileSelect();
+    
     // Auto-load first profile into builder
     if (profiles.length) {
       loadBuilderFromProfile(profiles[0]);
+      addLog(`✓ Loaded ${profiles.length} flow(s)`, 'info');
+    } else {
+      addLog('No saved flows found. Create one in the Builder tab.', 'warn');
     }
+    
     await loadEndpointDocs();
   } catch (e) {
     addLog('Failed to load profiles: ' + e.message, 'error');
+    profiles = [];
+    renderBuilderProfileSelect();
+    // Retry after delay
+    setTimeout(loadProfiles, 3000);
   }
 }
 

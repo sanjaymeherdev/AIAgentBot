@@ -1,6 +1,7 @@
 [
   {
     "name": "DeepSeek Send",
+    "slug": "deepseek-send",
     "url": "https://chat.deepseek.com",
     "steps": [
       { "id": 1, "action": "click", "x": 443, "y": 558, "label": "Click textarea" },
@@ -11,6 +12,7 @@
   },
   {
     "name": "Qwen Send",
+    "slug": "qwen-send",
     "url": "https://tongyi.aliyun.com/qianwen/",
     "steps": [
       { "id": 1, "action": "click", "x": 640, "y": 650, "label": "Click input" },
