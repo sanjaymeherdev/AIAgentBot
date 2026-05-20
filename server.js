@@ -1,4 +1,4 @@
-const puppeteer = require('puppeteer-core');
+const puppeteer = require('puppeteer');
 const express = require('express');
 const { execSync } = require('child_process');
 const fs = require('fs');
@@ -438,28 +438,52 @@ function normalizeExtractedText(text, context) {
 
 const UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36';
 
-function getChromiumPath() {
-  if (EXECUTABLE_PATH) return EXECUTABLE_PATH;
-  if (process.env.RENDER) return '/usr/bin/chromium';
+function getChromiumCandidates() {
+  const candidates = [];
+  const explicitPath = EXECUTABLE_PATH || process.env.BROWSER;
+
+  if (explicitPath) {
+    candidates.push(explicitPath);
+  }
+
   try {
-    const nixPath = execSync('ls -d /nix/store/*chromium-* 2>/dev/null | head -n 1').toString().trim();
-    if (nixPath) return `${nixPath}/bin/chromium`;
-  } catch (_) {}
-  const candidates = ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'];
-  for (const cmd of candidates) {
+    const bundledPath = puppeteer.executablePath();
+    if (bundledPath) candidates.push(bundledPath);
+  } catch (err) {
+    log(`Unable to resolve Puppeteer bundled executable path: ${err.message}`, 'warn');
+  }
+
+  const cmdCandidates = ['chromium', 'chromium-browser', 'google-chrome', 'google-chrome-stable'];
+  for (const cmd of cmdCandidates) {
     try {
-      return execSync(`which ${cmd}`).toString().trim();
+      const candidatePath = execSync(`which ${cmd}`).toString().trim();
+      if (candidatePath) candidates.push(candidatePath);
     } catch (_) {}
   }
-  return '/usr/bin/chromium';
+
+  return [...new Set(candidates.filter(Boolean))];
+}
+
+function getValidBrowserPath(candidates) {
+  for (const candidate of candidates) {
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch (_) {}
+  }
+  return null;
 }
 
 async function ensureBrowser() {
   if (browser && browser.isConnected()) return;
-  const exePath = getChromiumPath();
-  log(`Launching Chromium: ${exePath}`);
-  browser = await puppeteerExtra.launch({
-    executablePath: exePath,
+  const candidates = getChromiumCandidates();
+  const browserPath = getValidBrowserPath(candidates);
+  if (browserPath) {
+    log(`Launching Chromium from candidate path: ${browserPath}`);
+  } else {
+    log('Launching Chromium using default Puppeteer launcher');
+  }
+
+  const launchOptions = {
     headless: 'new',
     args: [
       '--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage',
@@ -474,7 +498,25 @@ async function ensureBrowser() {
     ignoreDefaultArgs: ['--enable-automation', '--disable-extensions'],
     pipe: true,
     timeout: 60000
-  });
+  };
+
+  if (browserPath) {
+    launchOptions.executablePath = browserPath;
+  }
+
+  try {
+    browser = await puppeteerExtra.launch(launchOptions);
+  } catch (err) {
+    if (browserPath) {
+      log(`Failed to launch browser at ${browserPath}: ${err.message}`, 'warn');
+      log('Retrying launch without explicit executablePath');
+      delete launchOptions.executablePath;
+      browser = await puppeteerExtra.launch(launchOptions);
+    } else {
+      throw err;
+    }
+  }
+
   browser.on('disconnected', () => { browser = null; page = null; log('Browser disconnected', 'warn'); });
 }
 
